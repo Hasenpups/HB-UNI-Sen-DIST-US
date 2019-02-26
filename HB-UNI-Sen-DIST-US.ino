@@ -20,11 +20,14 @@
 #define CONFIG_BUTTON_PIN  8
 #define LED_PIN            4
 
+#define USE_IO_AS_GND // comment out if normal GND pin is used
+
 // 1 SENSOR
 //                  SENSOR  1
 byte SENSOR_EN_PINS[]   =  {5}; //VCC Pin des Sensors
 byte SENSOR_ECHO_PINS[] =  {6};
 byte SENSOR_TRIG_PINS[] =  {14};
+byte SENSOR_GND_PINS[] = {9}; // not used if normal GND pin is used
 
 //// 2 SENSOREN
 ////                  SENSOR  1   2
@@ -32,8 +35,15 @@ byte SENSOR_TRIG_PINS[] =  {14};
 //byte SENSOR_ECHO_PINS[] =  {6,  3};
 //byte SENSOR_TRIG_PINS[] =  {14, 9};
 
+// battery measurement
+#define INTERNAL_VOLTAGE_MEASUREMENT // comment out if universal sensor
 #define BATT_EN_PIN        15 //A1
 #define BATT_SENS_PIN      17 //A3
+#ifdef INTERNAL_VOLTAGE_MEASUREMENT
+typedef as::BatterySensor           BatteryType;
+#else
+typedef as::BatterySensorUni<BATT_EN_PIN, BATT_SENS_PIN>  BatteryType;
+#endif
 
 // number of available peers per channel
 #define PEERS_PER_CHANNEL  6
@@ -46,7 +56,8 @@ using namespace as;
 
 enum UltrasonicSensorTypes {
   JSN_SR04T,
-  MAXSONAR
+  MAXSONAR,
+  US_100
 };
 
 // define all device properties
@@ -62,7 +73,7 @@ const struct DeviceInfo PROGMEM devinfo = {
 /**
    Configure the used hardware
 */
-typedef AskSin<StatusLed<LED_PIN>, BatterySensorUni<BATT_SENS_PIN, BATT_EN_PIN, 0>, Radio<AvrSPI<10, 11, 12, 13>, 2>> BaseHal;
+typedef AskSin<StatusLed<LED_PIN>, BatteryType, Radio<AvrSPI<10, 11, 12, 13>, 2>> BaseHal;
 class Hal : public BaseHal {
   public:
     void init (const HMID& id) {
@@ -140,6 +151,54 @@ class MeasureChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_C
     MeasureChannel () : Channel(), Alarm(0), distance(0) {}
     virtual ~MeasureChannel () {}
 
+    float US_100_measureDistance(int pin_enable, int pin_trigger, int pin_echo)
+    {
+      // variables
+      float returnValue = 0;
+      float echoTime = 0;
+      float distance = 0;
+
+      // activate the sensor
+      digitalWrite(pin_enable, HIGH);
+
+      // wait some time to boot up
+      _delay_ms(250);
+
+      // measure two times, because the first one will fail
+      // don't ask me why
+      for (int i = 0; i < 2; i++)
+      {
+        // set the trigger
+        digitalWrite(pin_trigger, LOW);
+        delayMicroseconds(2);
+        digitalWrite(pin_trigger, HIGH);
+        delayMicroseconds(50);
+        digitalWrite(pin_trigger, LOW);
+
+        // read the distance
+        echoTime = pulseIn(pin_echo, HIGH);
+
+        // calculate the distance
+        distance = (echoTime * 0.1657) / 10;
+
+        // check if value is valid and break, 400cm is the maximum of the sensor
+        //if (distance > 10 && distance < 4000)
+        //{
+        returnValue = distance;
+        // break;
+        //}
+
+        // delay some time before the next cycle
+        _delay_ms(5);
+      }
+
+      // deactivate the sensor
+      digitalWrite(pin_enable, LOW);
+
+      // return
+      return returnValue;
+    }
+
     void measure() {
       uint32_t m_value = 0;
       if (last_flags != flags()) {
@@ -166,6 +225,9 @@ class MeasureChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_C
           m_value = pulseIn(SENSOR_ECHO_PINS[number() - 1], HIGH);
           m_value = (m_value * 1000L / 57874L);
           digitalWrite(SENSOR_EN_PINS[number() - 1], LOW);
+          break;
+        case US_100:
+          m_value = US_100_measureDistance(SENSOR_EN_PINS[number() - 1], SENSOR_TRIG_PINS[number() - 1], SENSOR_ECHO_PINS[number() - 1]);
           break;
         default:
           DPRINTLN(F("Invalid Sensor Type selected"));
@@ -198,11 +260,18 @@ class MeasureChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_C
 
     void setup(Device<Hal, UList0>* dev, uint8_t number, uint16_t addr) {
       Channel::setup(dev, number, addr);
+
       for (byte i = 0; i < sizeof(SENSOR_EN_PINS); i++) {
         pinMode(SENSOR_ECHO_PINS[i], INPUT_PULLUP);
         pinMode(SENSOR_TRIG_PINS[i], OUTPUT);
         pinMode(SENSOR_EN_PINS[i], OUTPUT);
+
+#ifdef USE_IO_AS_GND
+        pinMode(SENSOR_GND_PINS[i], OUTPUT);
+        digitalWrite(SENSOR_GND_PINS[i], LOW);
+#endif
       }
+
       sysclock.add(*this);
     }
 
