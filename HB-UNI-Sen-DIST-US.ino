@@ -42,7 +42,7 @@ byte SENSOR_GND_PINS[] = {9}; // not used if normal GND pin is used
 #ifdef INTERNAL_VOLTAGE_MEASUREMENT
 typedef as::BatterySensor           BatteryType;
 #else
-typedef as::BatterySensorUni<BATT_EN_PIN, BATT_SENS_PIN>  BatteryType;
+typedef as::BatterySensorUni<BATT_EN_PIN, BATT_SENS_PIN, 0>  BatteryType;
 #endif
 
 // number of available peers per channel
